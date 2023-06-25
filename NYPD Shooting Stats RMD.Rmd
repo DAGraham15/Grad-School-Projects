@@ -1,0 +1,137 @@
+---
+title: "NYPD Shootings Analysis - Shootings Over Time By Borough"
+author: "Daniel Graham"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(lubridate)
+library(tidyverse)
+library(curl)
+library("ggpubr")
+```
+
+Utilizing data about shootings in NYC provided by the NYPD, I would like to see if there is a significant difference by borough in shootings by year (did certain boroughs became more or less safe relative to each other over time?). First, we can import our data set of NYPD shootings and validate the data.
+
+```{r import_step_1, message=FALSE, results=FALSE}
+shooting_data_URL <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv"
+
+NYPD_import_raw <- read_csv(shooting_data_URL)
+```
+
+```{r raw_tail, message=FALSE, results=TRUE}
+tail(NYPD_import_raw)
+```
+
+Most of these columns are not necessary for our analysis. All we need to retain is the date and borough of each shooting for our analysis, so I will create a new dataframe with just those fields, rename them to be more readable, and validate our results. 
+
+```{r import_step_2, message=FALSE, results=FALSE}
+NYPD_clean <- select(NYPD_import_raw, c("OCCUR_DATE","BORO"))
+NYPD_clean <- rename(NYPD_clean, 
+                                c(SHOOTING_DATE = "OCCUR_DATE", BOROUGH = "BORO"))
+```
+
+```{r NYPD_date_and_borough_summary, message=FALSE, results=TRUE}
+summary(NYPD_clean)
+```
+
+Our summary shows us that the date field was imported as a character string. We can resolve this utilizing the lubridate package, then we can set add a column for shooting year to allow for easier visualizations and groupings.
+
+```{r date_fix, message=FALSE, results=FALSE}
+NYPD_clean <- mutate(NYPD_clean, SHOOTING_DATE = mdy(SHOOTING_DATE))
+
+NYPD_clean$SHOOTING_YEAR <- strftime(NYPD_clean$SHOOTING_DATE, "%Y")
+```
+
+Now that the columns look correct and we have our dates sorted, we can then check all the unique values in the borough column to ensure all boroughs are represented, and that there are no unexpected values.
+
+```{r borough_validation, message=FALSE, results=TRUE}
+NYPD_clean %>% select(BOROUGH) %>% distinct
+```
+
+The data for boroughs looks good so we can move on to grouping by borough and year.
+
+We can first visualize this shooting data by viewing as a whole of NYC at a time, before splitting it out by borough.
+
+```{r overall_viz, message=FALSE, results=TRUE}
+overall_shootings_by_date <- NYPD_clean %>% count(SHOOTING_YEAR)
+
+overall_shootings_by_date %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) + 
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    labs(x = "Year", y = "Number of Shootings")
+```
+
+We can clearly see a consistent drop off from 2006 to 2017 with the total shootings more than halving. The shooting numbers exploded back up in 2020, but we still see an overall downward trend with all the data considered. Let's see if this trend is consistent across boroughs or if the distribution looks different at the borough level. We will start by creating an easily referenced data set for each borough with dates and shooting counts, then plot them side by side for visual analysis.
+
+```{r filter_by_borough, message=FALSE, results=FALSE}
+queens_shootings <- NYPD_clean %>% filter(BOROUGH == "QUEENS") %>% count(SHOOTING_YEAR)
+bronx_shootings <- NYPD_clean %>% filter(BOROUGH == "BRONX") %>% count(SHOOTING_YEAR)
+brooklyn_shootings <- NYPD_clean %>% filter(BOROUGH == "BROOKLYN") %>% count(SHOOTING_YEAR)
+manhattan_shootings <- NYPD_clean %>% filter(BOROUGH == "MANHATTAN") %>% count(SHOOTING_YEAR)
+staten_shootings <- NYPD_clean %>% filter(BOROUGH == "STATEN ISLAND") %>% count(SHOOTING_YEAR)
+```
+\newpage
+```{r plot_by_borough, include=TRUE, message=FALSE, results=TRUE}
+qs <- queens_shootings %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) +  
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    ggtitle("Queens") +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x=element_blank()) +
+    labs(x = NULL, y = NULL)
+
+bxs <- bronx_shootings %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) +   
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    ggtitle("Bronx") +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x=element_blank()) +
+    labs(x = NULL, y = NULL)
+
+bks <- brooklyn_shootings %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) +   
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    ggtitle("Brooklyn") +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x=element_blank()) +
+    labs(x = NULL, y = NULL)
+
+mhs <- manhattan_shootings %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) +   
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    ggtitle("Manhattan") +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x=element_blank()) +
+    labs(x = NULL, y = NULL)
+
+sis <- staten_shootings %>% 
+    ggplot(aes(x=SHOOTING_YEAR, y=n)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) +   
+    geom_smooth(aes(SHOOTING_YEAR,n,group=1), se=FALSE, method="lm", size=1, color="darkblue") +
+    ggtitle("Staten Is.") +
+    theme(plot.title = element_text(hjust = 0.5), axis.text.x=element_blank()) +
+    labs(x = NULL, y = NULL)
+
+ggarrange(qs, bxs, bks, mhs, sis, ncol=5, nrow=1)
+```
+Analysis:
+
+We can see from our plots in a visual comparison that the five boroughs each follow roughly the same distribution. It looks like over the last few years, Staten Island has had less shootings relative to the other boroughs. Manhattan has had more shootings relative to the other boroughs and this can be seen with the trendline that is almost flat, compared to the others which all show a marked decrease. We can see this is due to previously having fewer shootings, and more recently having a more stark increase in shootings.
+
+Conclusion:
+
+While further analysis can be done on this data to find other trends, our initial results seem to show that the boroughs all followed a similar trend in yearly shootings with the exception of Staten Island in the last three years, where shootings are less relative to the other boroughs. This trend on Staten Island could warrant further investigation, but it answers our initial question. As someone mostly unfamiliar with New York, and working with a raw data set, bias should not have affected this analysis.
+
+\newpage
+### SESSION INFO:
+```{r sessioninfo, echo=FALSE}
+sessionInfo()
+```
+
