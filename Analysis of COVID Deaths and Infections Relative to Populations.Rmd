@@ -1,0 +1,167 @@
+---
+title: "Analysis of COVID Deaths and Infections Relative to Populations"
+author: "Daniel Graham"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(lubridate)
+library(tidyverse)
+library(curl)
+```
+
+## Data Import
+
+The data sets we will work with are published to github through Johns Hopkins University ([github.com/CSSEGISandData/COVID-19](github.com/CSSEGISandData/COVID-19)). The data sets represent data on COVID Global Cases, Global Deaths, and Global population. We will import our data sources in their raw format into three sets, then proceed to validating and tidying the data.
+
+We will determine which countries had the deadliest outbreaks proportional to their population, and then find out which countries had the deadliest outbreaks proportional to their number of cases (deaths per infection).
+
+Finally, we will see if there is a correlation between the two metrics mentioned above.
+
+
+```{r import_step_1, message=FALSE, results=FALSE}
+GLOBAL_CASES_URL <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+GLOBAL_DEATHS_URL <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
+GLOBAL_POPULATION_URL <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+GLOBAL_CASES_RAW <- read_csv(GLOBAL_CASES_URL)
+GLOBAL_DEATHS_RAW <- read_csv(GLOBAL_DEATHS_URL)
+GLOBAL_POPULATION_RAW <- read_csv(GLOBAL_POPULATION_URL)
+```
+
+## Tidying and Data Manipulation
+
+We discarded the Lat and Long fields and renamed the country and province columns for both the global cases and global deaths data sets. We then joined the two sets on country and province, and removed all columns where cases were 0.
+
+We then joined the population data to the data set to add a population column to allow further analysis, and removed any rows that had an NA for population.
+
+From here, the countries were grouped up to sum all cases and deaths for the entire region instead of splitting them out province and state. In this step, we also create three new fields for cases per population, deaths per population, and deaths per case to allow for visualization and analysis on these metrics.
+
+When checking the max Deaths Per Case, we find that the data for North Korea shows 1 case but 6 deaths. This is obviously inaccurate and throws off the metric, so we will remove all data for North Korea as it is not useful for analysis.
+
+```{r GLOBAL_TIDYING, message=FALSE, results=TRUE}
+GLOBAL_CASES_TIDY <- GLOBAL_CASES_RAW %>% 
+    pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+                 names_to = "Date",
+                 values_to = "Cases") %>%
+    select(-c(Lat,Long))
+
+GLOBAL_DEATHS_TIDY <- GLOBAL_DEATHS_RAW %>% 
+    pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+                 names_to = "Date",
+                 values_to = "Deaths") %>%
+    select(-c(Lat,Long))
+
+GLOBAL_WORKING_DATA <- GLOBAL_CASES_TIDY %>% 
+    full_join(GLOBAL_DEATHS_TIDY) %>%
+    rename(Country_Region = 'Country/Region', Province_State = 'Province/State') %>%
+    mutate(Date = mdy(Date)) %>% 
+    filter(Cases > 0) %>%
+    filter(!Country_Region == "Korea, North")
+
+GLOBAL_WORKING_DATA <- GLOBAL_WORKING_DATA %>%
+    left_join(GLOBAL_POPULATION_RAW, by = c("Province_State", "Country_Region")) %>%
+    select(-c(UID, FIPS)) %>%
+    select(Province_State, Country_Region, Date, Cases, Deaths, Population)
+
+GLOBAL_WORKING_DATA <- GLOBAL_WORKING_DATA %>%
+    filter(!is.na(Population))
+
+GLOBAL_WORKING_DATA <- GLOBAL_WORKING_DATA %>%
+    group_by(Country_Region, Date) %>%
+    summarize(Cases = sum(Cases), Deaths = sum(Deaths), Population = sum(Population)) %>%
+    mutate(Cases_Per_Mil = Cases * 1000000 / Population, 
+           Deaths_Per_Mil = Deaths * 1000000 / Population, 
+           Deaths_Per_Case = Deaths / Cases) %>%
+    ungroup()
+
+summary(GLOBAL_WORKING_DATA)
+```
+## Visualization and Analysis
+
+Now that we have data tidied and workable, we can start to visualize the data and analyze our findings. We will start with a visualization of the countries with the top 6 highest death rates relative to their populations.
+
+```{r max_death_rates_1, fig.width=10, message=FALSE, results=FALSE}
+Top_6_Deaths_Per_Pop <- GLOBAL_WORKING_DATA %>% 
+    group_by(Country_Region) %>% 
+    summarise(Deaths_Per_Mil = max(Deaths_Per_Mil)) %>%
+    arrange(desc(Deaths_Per_Mil)) %>%
+    slice(1:6)
+  
+Top_6_Deaths_Per_Pop %>%
+    ggplot(aes(x=reorder(Country_Region, -Deaths_Per_Mil), y=Deaths_Per_Mil)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) + 
+    labs(x = "Country", y = "Deaths Per Million Population")
+```
+One interesting observation from this graph is that aside from Peru, which had the highest deaths per population, all the rest of these countries are in Eastern Europe.
+
+Out of curiosity, let's see which countries had the top 10 highest case rates proportional to population. We should not necessarily expect to see overlap, since the deadliness of a country's outbreak relative to population and the number of cases in a country relative to population are not necessarily correlated.
+
+```{r max_case_rates_1, fig.width=10, message=FALSE, results=FALSE}
+Top_10_Cases_Per_Pop <- GLOBAL_WORKING_DATA %>% 
+    group_by(Country_Region) %>% 
+    summarise(Cases_Per_Mil = max(Cases_Per_Mil)) %>%
+    arrange(desc(Cases_Per_Mil)) %>%
+    slice(1:10)
+  
+Top_10_Cases_Per_Pop %>%
+    ggplot(aes(x=reorder(Country_Region, -Cases_Per_Mil), y=Cases_Per_Mil)) + 
+    geom_bar(stat="identity", color="black", fill=rgb(0.1,0.4,0.5,0.7)) + 
+    labs(x = "Country", y = "Cases Per Million Population")
+```
+Most of the countries in this resulting set have small populations and/or are more densely populated, which could help explain the higher proportion of cases adjusted for population. In a country with low population and a low land mass, less cases make up a larger proportion. In a country with a high density, it is easier to spread infections. In countries with both, these effects could be additive.
+
+From here, let's see if there is any correlation between cases per population and deaths per population, among all countries in our working global data set.
+
+```{r correlation_setup, message=FALSE, results=TRUE}
+
+Max_Deaths_Per_Pop <- GLOBAL_WORKING_DATA %>% 
+    group_by(Country_Region) %>% 
+    summarise(Deaths_Per_Mil = max(Deaths_Per_Mil))
+
+Max_Cases_Per_Pop <- GLOBAL_WORKING_DATA %>% 
+    group_by(Country_Region) %>% 
+    summarise(Cases_Per_Mil = max(Cases_Per_Mil))
+  
+Deaths_vs_Cases_Per_Pop <- Max_Deaths_Per_Pop %>%
+    left_join(Max_Cases_Per_Pop, by = c("Country_Region"))
+
+correlation_model <- lm(Cases_Per_Mil ~ Deaths_Per_Mil, data = Deaths_vs_Cases_Per_Pop)
+
+summary(correlation_model)
+```
+
+We can see that the predictive accuracy is not significant or valuable due to the low R-squared value (<0.4), but we expected this to be the case. Let's plot the actual vs predicted deaths based on the number of cases.
+
+```{r correlation2_vis, message=FALSE, results=FALSE, warning=FALSE}
+
+Deaths_vs_Cases_Per_Pop_Pred <- Deaths_vs_Cases_Per_Pop %>% mutate(pred = predict(correlation_model))
+
+Deaths_vs_Cases_Per_Pop_Pred %>% ggplot() +
+    geom_point(aes(x = Cases_Per_Mil, y = Deaths_Per_Mil), color="blue") + 
+    geom_point(aes(x = Cases_Per_Mil, y = pred), color = "red") + 
+    labs(x = "Cases Per Million Population", y = "Deaths Per Million Population") +
+    ylim(0,6000)
+```
+Backing up what we saw in the summary, we can see that that the data does not group closely to the prediction line, and that it is not a very relevant metric. We should not use this model to attempt to predict anything.
+
+## Conclusion
+
+Through our analysis, we saw that the countries with the deadliest outbreaks proportional to their populations were all located in Eastern Europe, with the exception of Peru (which was the deadliest). At this time we do not have an explanation for either finding, but these are good topics to attempt to investigate in future reasearch.
+
+We also found that the countries with the highest proportion of cases to population might be explained by the population density, low population, or both. This could be further examined in further studies.
+
+We tested to see if there was a correlation between the numbers of cases relative to population and the relative deadliness of the outbreak, and found the correlation was weak and not useful for prediction. 
+
+Potential biases could have been introduced to our data through collection methods and reporting. For example, we had to throw out data for North Korea because it was obviously inaccurate, likely due to the secretive nature of their government. We cannot assume all the data is accurate, and that all reporting is done in good faith.
+
+\newpage
+### SESSION INFO:
+```{r sessioninfo, echo=FALSE}
+sessionInfo()
+```
